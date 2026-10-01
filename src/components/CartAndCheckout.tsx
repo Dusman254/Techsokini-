@@ -1,12 +1,15 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   Bookmark,
   CheckCircle2,
   Minus,
   Plus,
+  ShieldCheck,
   ShoppingBag,
+  Smartphone,
   Trash2,
+  Truck,
   X,
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
@@ -20,6 +23,7 @@ export const CartAndCheckout: React.FC = () => {
     cart,
     savedForLater,
     settings,
+    currentClient,
     isCartOpen,
     setIsCartOpen,
     isCheckoutOpen,
@@ -44,6 +48,17 @@ export const CartAndCheckout: React.FC = () => {
     'M-Pesa Express'
   );
   const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
+
+  // Pre-fill from logged-in client account when opening checkout
+  useEffect(() => {
+    if (currentClient) {
+      setCustomerName((prev) => prev || currentClient.name);
+      setCustomerEmail((prev) => prev || currentClient.email);
+      setCustomerPhone((prev) => prev || currentClient.phone);
+      setShippingAddress((prev) => prev || currentClient.defaultAddress);
+      setCity((prev) => prev || currentClient.city || 'Nairobi');
+    }
+  }, [currentClient, isCheckoutOpen]);
 
   const detailedCart = useMemo(() => {
     return cart
@@ -382,205 +397,369 @@ export const CartAndCheckout: React.FC = () => {
       )}
 
       {/* =====================================================================
-          CHECKOUT & ORDER CONFIRMATION MODAL
+          CHECKOUT & ORDER CONFIRMATION MODAL (MOBILE-OPTIMIZED SCROLL & LAYOUT)
          ===================================================================== */}
       {isCheckoutOpen && (
         <div
           role="dialog"
           aria-modal="true"
           aria-label="Tech Sokoni Checkout"
-          className="fixed inset-0 z-50 bg-[#141413]/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+          className="fixed inset-0 z-50 bg-[#141413]/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
         >
-          <div className="bg-[#F4F3EF] border border-[#141413]/20 max-w-2xl w-full p-6 sm:p-10 my-8 shadow-2xl">
-            <div className="flex items-center justify-between pb-6 border-b border-[#141413]/10">
-              <span className="text-xs font-mono-num uppercase tracking-[0.2em] text-[#6E6D68]">
-                TECH SOKONI · DIRECT DISPATCH CHECKOUT
-              </span>
+          <div className="bg-[#F4F3EF] border-t sm:border border-[#141413]/20 max-w-2xl w-full max-h-[94dvh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Sticky Top Header Bar — Always visible on Mobile & Desktop */}
+            <div className="px-4 sm:px-8 py-4 border-b border-[#141413]/12 bg-[#F4F3EF] flex items-center justify-between shrink-0">
+              <div>
+                <p className="text-[10px] sm:text-xs font-mono-num uppercase tracking-[0.18em] text-[#141413] font-semibold">
+                  TECH SOKONI · DIRECT DISPATCH CHECKOUT
+                </p>
+                <p className="text-[10px] font-mono-num text-[#6E6D68]">
+                  Kenyatta Pioneer Bldg, Shop 514 · Free Nationwide Delivery
+                </p>
+              </div>
               <button
+                type="button"
                 onClick={() => setIsCheckoutOpen(false)}
-                className="text-xs font-mono-num uppercase tracking-widest text-[#141413] hover:opacity-70 cursor-pointer"
+                aria-label="Close checkout"
+                className="w-9 h-9 flex items-center justify-center border border-[#141413]/15 text-[#141413] hover:bg-[#141413] hover:text-[#F4F3EF] transition-colors cursor-pointer shrink-0"
               >
-                Close
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            {confirmedOrder ? (
-              <div className="py-10 text-center space-y-5">
-                <CheckCircle2 className="w-12 h-12 text-[#1F6F43] mx-auto stroke-[1.5]" />
-                <div>
-                  <p className="text-xs font-mono-num uppercase tracking-[0.2em] text-[#1F6F43]">
-                    ORDER CONFIRMED · {confirmedOrder.orderNumber}
-                  </p>
-                  <h3 className="font-editorial text-3xl sm:text-4xl text-[#141413] mt-1">
-                    Thank you, {confirmedOrder.customerName}.
-                  </h3>
-                  <p className="text-xs text-[#5E5D59] mt-2 max-w-md mx-auto">
-                    Your order has been logged in the Tech Sokoni Dispatch Console
-                    and is being prepared for insured delivery to{' '}
-                    {confirmedOrder.shippingAddress}, {confirmedOrder.city}.
-                  </p>
-                </div>
-
-                <div className="bg-[#EAE9E4] p-4 max-w-md mx-auto text-left text-xs font-mono-num space-y-1.5">
-                  <div className="flex justify-between">
-                    <span className="text-[#6E6D68]">Order Reference:</span>
-                    <span className="font-semibold">
-                      {confirmedOrder.orderNumber}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#6E6D68]">Payment Method:</span>
-                    <span>{confirmedOrder.paymentMethod}</span>
-                  </div>
-                  <div className="flex justify-between pt-2 border-t border-[#141413]/10 text-sm font-semibold">
-                    <span>Total Paid / Authorised:</span>
-                    <span>
-                      {settings.currencySymbol}
-                      {confirmedOrder.total.toLocaleString()}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-                  <button
-                    onClick={() =>
-                      downloadOrderReceiptPdf(confirmedOrder, settings)
-                    }
-                    className="px-5 py-2.5 bg-[#141413] text-[#F4F3EF] text-xs font-mono-num uppercase tracking-widest hover:bg-[#2B2B28] cursor-pointer"
-                  >
-                    Download PDF Receipt
-                  </button>
-                  <button
-                    onClick={() => {
-                      setIsCheckoutOpen(false);
-                      setConfirmedOrder(null);
-                      navigate({ page: 'client-portal' });
-                    }}
-                    className="px-5 py-2.5 border border-[#141413] text-[#141413] text-xs font-mono-num uppercase tracking-widest hover:bg-[#141413] hover:text-[#F4F3EF] cursor-pointer"
-                  >
-                    Track Order Progress
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={handleCheckoutSubmit} className="pt-6 space-y-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Scrollable Modal Body */}
+            <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-5 sm:py-7">
+              {confirmedOrder ? (
+                <div className="py-6 sm:py-8 text-center space-y-5">
+                  <CheckCircle2 className="w-12 h-12 text-[#1F6F43] mx-auto stroke-[1.5]" />
                   <div>
-                    <label className="block text-[11px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-1.5">
-                      Full Name *
+                    <p className="text-xs font-mono-num uppercase tracking-[0.2em] text-[#1F6F43] font-semibold">
+                      ORDER CONFIRMED · {confirmedOrder.orderNumber}
+                    </p>
+                    <h3 className="font-editorial text-3xl sm:text-4xl text-[#141413] mt-1">
+                      Thank you, {confirmedOrder.customerName}.
+                    </h3>
+                    <p className="text-xs text-[#5E5D59] mt-2 max-w-md mx-auto leading-relaxed">
+                      Your order has been logged at Tech Sokoni Kenya (Kenyatta
+                      Pioneer Building, 5th Floor, Shop 514) and is being
+                      dispatched to {confirmedOrder.shippingAddress},{' '}
+                      {confirmedOrder.city}.
+                    </p>
+                  </div>
+
+                  <div className="bg-[#EAE9E4] border border-[#141413]/10 p-4 max-w-md mx-auto text-left text-xs font-mono-num space-y-2">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-[#6E6D68]">Order Reference:</span>
+                      <span className="font-semibold text-[#141413]">
+                        {confirmedOrder.orderNumber}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-[#6E6D68]">Payment Method:</span>
+                      <span className="font-semibold text-[#141413]">
+                        {confirmedOrder.paymentMethod}
+                      </span>
+                    </div>
+                    {confirmedOrder.paymentMethod === 'M-Pesa Express' && (
+                      <div className="flex justify-between gap-2 text-[#1F6F43]">
+                        <span>Lipa Na M-Pesa Buy Goods Till:</span>
+                        <span className="font-semibold">9309020</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between pt-2 border-t border-[#141413]/10 text-sm font-semibold text-[#141413]">
+                      <span>Order Total:</span>
+                      <span>
+                        {settings.currencySymbol}
+                        {confirmedOrder.total.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-3 pt-2 max-w-md mx-auto">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadOrderReceiptPdf(confirmedOrder, settings)
+                      }
+                      className="flex-1 px-5 py-3 bg-[#141413] text-[#F4F3EF] text-xs font-mono-num uppercase tracking-widest hover:bg-[#2B2B28] cursor-pointer"
+                    >
+                      Download PDF Receipt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCheckoutOpen(false);
+                        setConfirmedOrder(null);
+                        navigate({ page: 'client-portal' });
+                      }}
+                      className="flex-1 px-5 py-3 border border-[#141413] text-[#141413] text-xs font-mono-num uppercase tracking-widest hover:bg-[#141413] hover:text-[#F4F3EF] cursor-pointer"
+                    >
+                      Track Order Progress
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <form
+                  id="tech-sokoni-checkout-form"
+                  onSubmit={handleCheckoutSubmit}
+                  className="space-y-5"
+                >
+                  {/* Compact Order Items Preview Strip */}
+                  <div className="bg-[#EAE9E4]/70 border border-[#141413]/10 p-3.5 space-y-2">
+                    <div className="flex items-center justify-between text-[11px] font-mono-num">
+                      <span className="uppercase tracking-wider text-[#141413] font-semibold">
+                        Order Summary ({detailedCart.length}{' '}
+                        {detailedCart.length === 1 ? 'System' : 'Systems'})
+                      </span>
+                      <span className="text-[#1F6F43] font-medium">
+                        Free Shipping Included
+                      </span>
+                    </div>
+                    <div className="max-h-28 overflow-y-auto divide-y divide-[#141413]/8 pr-1">
+                      {detailedCart.map((c) => (
+                        <div
+                          key={c.itemKey}
+                          className="py-1.5 flex items-center justify-between gap-2 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <p className="font-medium text-[#141413] truncate">
+                              {c.quantity}× {c.product.name}
+                            </p>
+                            {c.selectedVariations &&
+                              Object.keys(c.selectedVariations).length > 0 && (
+                                <p className="text-[10px] font-mono-num text-[#6E6D68] truncate">
+                                  {Object.entries(c.selectedVariations)
+                                    .map(([k, v]) => `${k}: ${v}`)
+                                    .join(' · ')}
+                                </p>
+                              )}
+                          </div>
+                          <span className="font-mono-num font-semibold text-[#141413] shrink-0">
+                            {settings.currencySymbol}
+                            {c.lineFinal.toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Client & Delivery Fields */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <div>
+                      <label className="block text-[10px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-1">
+                        Full Name *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={customerName}
+                        onChange={(e) => setCustomerName(e.target.value)}
+                        placeholder="e.g. Eng. Brian Kiprop"
+                        className="w-full bg-[#EAE9E4]/60 border border-[#141413]/20 px-3.5 py-2.5 text-xs text-[#141413]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-1">
+                        M-Pesa / Contact Phone Number *
+                      </label>
+                      <input
+                        type="tel"
+                        required
+                        value={customerPhone}
+                        onChange={(e) => setCustomerPhone(e.target.value)}
+                        placeholder="e.g. 0792 620 789 or +254 7..."
+                        className="w-full bg-[#EAE9E4]/60 border border-[#141413]/20 px-3.5 py-2.5 text-xs text-[#141413]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-1">
+                        Email for Official PDF Receipt *
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        value={customerEmail}
+                        onChange={(e) => setCustomerEmail(e.target.value)}
+                        placeholder="name@company.com"
+                        className="w-full bg-[#EAE9E4]/60 border border-[#141413]/20 px-3.5 py-2.5 text-xs text-[#141413]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-1">
+                        County / City / Town *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={city}
+                        onChange={(e) => setCity(e.target.value)}
+                        placeholder="e.g. Nairobi, Mombasa, Kisumu, Nakuru"
+                        className="w-full bg-[#EAE9E4]/60 border border-[#141413]/20 px-3.5 py-2.5 text-xs text-[#141413]"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-1">
+                      Delivery Street / Building / Office Suite *
                     </label>
                     <input
                       type="text"
                       required
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                      placeholder="e.g. Eng.Brian Kiprop"
+                      value={shippingAddress}
+                      onChange={(e) => setShippingAddress(e.target.value)}
+                      placeholder="e.g. 4th Floor, Delta Corner, Westlands (or Pickup at Shop 514)"
                       className="w-full bg-[#EAE9E4]/60 border border-[#141413]/20 px-3.5 py-2.5 text-xs text-[#141413]"
                     />
                   </div>
-                  <div>
-                    <label className="block text-[11px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-1.5">
-                      Phone Number *
-                    </label>
-                    <input
-                      type="tel"
-                      required
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      placeholder="+254 7..."
-                      className="w-full bg-[#EAE9E4]/60 border border-[#141413]/20 px-3.5 py-2.5 text-xs text-[#141413]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-1.5">
-                      Email for Serial & Warranty Receipt *
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      value={customerEmail}
-                      onChange={(e) => setCustomerEmail(e.target.value)}
-                      placeholder="name@company.com"
-                      className="w-full bg-[#EAE9E4]/60 border border-[#141413]/20 px-3.5 py-2.5 text-xs text-[#141413]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-1.5">
-                      City / Region *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      className="w-full bg-[#EAE9E4]/60 border border-[#141413]/20 px-3.5 py-2.5 text-xs text-[#141413]"
-                    />
-                  </div>
-                </div>
 
-                <div>
-                  <label className="block text-[11px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-1.5">
-                    Delivery Street / Building / Suite *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={shippingAddress}
-                    onChange={(e) => setShippingAddress(e.target.value)}
-                    placeholder="e.g. 4th Floor, Delta Corner, Westlands"
-                    className="w-full bg-[#EAE9E4]/60 border border-[#141413]/20 px-3.5 py-2.5 text-xs text-[#141413]"
-                  />
-                </div>
+                  {/* Official Tech Sokoni Payment Methods: ONLY M-Pesa Express & Payment on Delivery */}
+                  <div className="space-y-2.5">
+                    <label className="block text-[10px] font-mono-num uppercase tracking-wider text-[#141413] font-semibold">
+                      Select Payment Method (M-Pesa or Payment on Delivery)
+                    </label>
 
-                <div>
-                  <label className="block text-[11px] font-mono-num uppercase tracking-wider text-[#6E6D68] mb-2">
-                    Payment Method
-                  </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    {(
-                      [
-                        'M-Pesa Express',
-                        'Card / Apple Pay',
-                        'Bank Transfer',
-                        'Cash on Delivery',
-                      ] as const
-                    ).map((method) => (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Option 1: M-Pesa Express */}
                       <button
                         type="button"
-                        key={method}
-                        onClick={() => setPaymentMethod(method)}
-                        className={`py-2.5 px-3 text-xs font-mono-num border text-center transition-colors cursor-pointer ${
-                          paymentMethod === method
+                        onClick={() => setPaymentMethod('M-Pesa Express')}
+                        className={`p-3.5 border text-left transition-all cursor-pointer flex items-start gap-3 ${
+                          paymentMethod === 'M-Pesa Express'
                             ? 'bg-[#141413] text-[#F4F3EF] border-[#141413]'
-                            : 'bg-[#EAE9E4]/40 text-[#141413] border-[#141413]/15'
+                            : 'bg-[#EAE9E4]/50 text-[#141413] border-[#141413]/20 hover:border-[#141413]'
                         }`}
                       >
-                        {method}
+                        <Smartphone
+                          className={`w-4 h-4 shrink-0 mt-0.5 ${
+                            paymentMethod === 'M-Pesa Express'
+                              ? 'text-[#36B37E]'
+                              : 'text-[#1F6F43]'
+                          }`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-mono-num font-semibold uppercase tracking-wider">
+                              M-Pesa Express
+                            </span>
+                            <span
+                              className={`text-[9px] font-mono-num uppercase px-1.5 py-0.5 ${
+                                paymentMethod === 'M-Pesa Express'
+                                  ? 'bg-[#1F6F43] text-[#F4F3EF]'
+                                  : 'bg-[#1F6F43]/15 text-[#1F6F43]'
+                              }`}
+                            >
+                              Till 9309020
+                            </span>
+                          </div>
+                          <p
+                            className={`text-[11px] mt-1 leading-snug ${
+                              paymentMethod === 'M-Pesa Express'
+                                ? 'text-[#F4F3EF]/80'
+                                : 'text-[#5E5D59]'
+                            }`}
+                          >
+                            Instant STK Push prompt or Lipa Na M-Pesa Buy Goods
+                            Till 9309020.
+                          </p>
+                        </div>
                       </button>
-                    ))}
+
+                      {/* Option 2: Payment on Delivery */}
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod('Payment on Delivery')}
+                        className={`p-3.5 border text-left transition-all cursor-pointer flex items-start gap-3 ${
+                          paymentMethod === 'Payment on Delivery'
+                            ? 'bg-[#141413] text-[#F4F3EF] border-[#141413]'
+                            : 'bg-[#EAE9E4]/50 text-[#141413] border-[#141413]/20 hover:border-[#141413]'
+                        }`}
+                      >
+                        <Truck
+                          className={`w-4 h-4 shrink-0 mt-0.5 ${
+                            paymentMethod === 'Payment on Delivery'
+                              ? 'text-[#36B37E]'
+                              : 'text-[#141413]'
+                          }`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-mono-num font-semibold uppercase tracking-wider">
+                              Payment on Delivery
+                            </span>
+                            <span
+                              className={`text-[9px] font-mono-num uppercase px-1.5 py-0.5 ${
+                                paymentMethod === 'Payment on Delivery'
+                                  ? 'bg-[#1F6F43] text-[#F4F3EF]'
+                                  : 'bg-[#141413]/10 text-[#141413]'
+                              }`}
+                            >
+                              Inspect First
+                            </span>
+                          </div>
+                          <p
+                            className={`text-[11px] mt-1 leading-snug ${
+                              paymentMethod === 'Payment on Delivery'
+                                ? 'text-[#F4F3EF]/80'
+                                : 'text-[#5E5D59]'
+                            }`}
+                          >
+                            Inspect your package upon arrival before paying via
+                            Cash or M-Pesa.
+                          </p>
+                        </div>
+                      </button>
+                    </div>
+
+                    {/* Contextual Payment Method Guidance Banner */}
+                    {paymentMethod === 'M-Pesa Express' ? (
+                      <div className="p-3 bg-[#1F6F43]/10 border border-[#1F6F43]/30 text-xs text-[#141413] flex items-center justify-between gap-3">
+                        <span className="text-[11px]">
+                          Lipa Na M-Pesa Buy Goods Till:{' '}
+                          <strong className="font-mono-num">9309020</strong>{' '}
+                          (Tech Sokoni Kenya)
+                        </span>
+                        <span className="text-[10px] font-mono-num uppercase tracking-wider text-[#1F6F43] font-semibold shrink-0">
+                          Instant Verification
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-[#EAE9E4] border border-[#141413]/15 text-xs text-[#141413] flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-[#1F6F43] shrink-0" />
+                        <span className="text-[11px]">
+                          Zero risk: Verify your physical hardware upon delivery
+                          before paying Cash or M-Pesa.
+                        </span>
+                      </div>
+                    )}
                   </div>
-                </div>
 
-                <div className="bg-[#EAE9E4] p-4 flex items-center justify-between text-sm font-mono-num">
-                  <span>
-                    Order Total ({detailedCart.length}{' '}
-                    {detailedCart.length === 1 ? 'item' : 'items'})
-                  </span>
-                  <span className="text-lg font-semibold text-[#141413]">
-                    {settings.currencySymbol}
-                    {total.toLocaleString()}
-                  </span>
-                </div>
+                  {/* Total & Submit CTA */}
+                  <div className="pt-2 space-y-3">
+                    <div className="bg-[#EAE9E4] p-3.5 flex items-center justify-between text-xs sm:text-sm font-mono-num">
+                      <span>
+                        Total Due ({detailedCart.length}{' '}
+                        {detailedCart.length === 1 ? 'item' : 'items'}) · Free
+                        Delivery
+                      </span>
+                      <span className="text-base sm:text-lg font-semibold text-[#141413]">
+                        {settings.currencySymbol}
+                        {total.toLocaleString()}
+                      </span>
+                    </div>
 
-                <button
-                  type="submit"
-                  className="w-full py-3.5 bg-[#141413] text-[#F4F3EF] text-xs font-mono-num uppercase tracking-[0.2em] hover:bg-[#2B2B28] transition-colors cursor-pointer"
-                >
-                  Complete Order ({settings.currencySymbol}
-                  {total.toLocaleString()})
-                </button>
-              </form>
-            )}
+                    <button
+                      type="submit"
+                      className="w-full py-3.5 bg-[#141413] text-[#F4F3EF] text-xs font-mono-num uppercase tracking-[0.18em] hover:bg-[#2B2B28] transition-colors cursor-pointer font-semibold"
+                    >
+                      {paymentMethod === 'M-Pesa Express'
+                        ? `Confirm & Pay via M-Pesa (${settings.currencySymbol}${total.toLocaleString()})`
+                        : `Confirm Order — Pay on Delivery (${settings.currencySymbol}${total.toLocaleString()})`}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           </div>
         </div>
       )}

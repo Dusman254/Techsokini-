@@ -900,7 +900,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerPhone: '+254 711 409 221',
     shippingAddress: '14 Peponi Road, Westlands',
     city: 'Nairobi',
-    paymentMethod: 'Card / Apple Pay',
+    paymentMethod: 'Payment on Delivery',
     items: [
       {
         productId: 'prod-studio-display-6k',

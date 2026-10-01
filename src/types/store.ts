@@ -141,11 +141,7 @@ export interface Order {
   customerPhone: string;
   shippingAddress: string;
   city: string;
-  paymentMethod:
-    | 'M-Pesa Express'
-    | 'Card / Apple Pay'
-    | 'Bank Transfer'
-    | 'Cash on Delivery';
+  paymentMethod: 'M-Pesa Express' | 'Payment on Delivery';
   items: OrderItem[];
   subtotal: number;
   discountTotal: number;

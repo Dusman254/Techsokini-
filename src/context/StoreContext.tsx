@@ -159,7 +159,7 @@ const StoreContext = createContext<StoreContextValue | undefined>(undefined);
 const STORAGE_KEYS = {
   ALL_PRODUCTS: 'tech_sokoni_products_v3',
   OFFERS: 'tech_sokoni_offers_v3',
-  ORDERS: 'tech_sokoni_orders_v3',
+  ORDERS: 'tech_sokoni_orders_v4',
   CART: 'tech_sokoni_cart_v3',
   SAVED: 'tech_sokoni_saved_v3',
   WISHLIST: 'tech_sokoni_wishlist_v3',
