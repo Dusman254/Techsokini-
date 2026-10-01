@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CATEGORIES,
   INITIAL_OFFERS,
@@ -19,6 +19,33 @@ import {
   ProductReview,
   SiteSettings,
 } from '../types/store';
+import {
+  auth,
+  collection,
+  createUserWithEmailAndPassword,
+  db,
+  doc,
+  fetchOrCreateClientForFirebaseUser,
+  googleProvider,
+  handleFirestoreError,
+  onAuthStateChanged,
+  onSnapshot,
+  OperationType,
+  removeOfferFromFirestore,
+  removeProductFromFirestore,
+  saveCategoryToFirestore,
+  saveClientToFirestore,
+  saveOfferToFirestore,
+  saveOrderToFirestore,
+  saveProductToFirestore,
+  saveSettingsToFirestore,
+  seedFirestoreIfEmpty,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  probeFirestoreAccess,
+  updateProfile,
+} from '../services/firebase';
 
 export interface EffectivePricing {
   originalPrice: number;
@@ -77,9 +104,20 @@ interface StoreContextValue {
   // Client Auth
   clients: ClientAccount[];
   currentClient: ClientAccount | null;
-  loginClient: (email: string, password: string) => boolean;
-  registerClient: (data: Omit<ClientAccount, 'id' | 'createdAt'>) => ClientAccount;
-  logoutClient: () => void;
+  isFirebaseConnected: boolean;
+  loginClient: (
+    email: string,
+    password: string
+  ) => Promise<{ ok: boolean; error?: string }>;
+  registerClient: (
+    data: Omit<ClientAccount, 'id' | 'createdAt'>
+  ) => Promise<{ ok: boolean; client?: ClientAccount; error?: string }>;
+  loginWithGoogle: () => Promise<{
+    ok: boolean;
+    client?: ClientAccount;
+    error?: string;
+  }>;
+  logoutClient: () => Promise<void>;
   updateClientProfile: (updates: Partial<ClientAccount>) => void;
   cancelClientOrder: (orderId: string) => void;
 
@@ -159,7 +197,7 @@ const StoreContext = createContext<StoreContextValue | undefined>(undefined);
 const STORAGE_KEYS = {
   ALL_PRODUCTS: 'tech_sokoni_products_v3',
   OFFERS: 'tech_sokoni_offers_v3',
-  ORDERS: 'tech_sokoni_orders_v4',
+  ORDERS: 'tech_sokoni_orders_v5',
   CART: 'tech_sokoni_cart_v3',
   SAVED: 'tech_sokoni_saved_v3',
   WISHLIST: 'tech_sokoni_wishlist_v3',
@@ -243,6 +281,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const [isAdminAuthenticated, setIsAdminAuthenticated] =
     useState<boolean>(false);
+  const [isFirebaseConnected, setIsFirebaseConnected] =
+    useState<boolean>(false);
 
   const [route, setRoute] = useState<ActiveRoute>({ page: 'home' });
   const [isRouteLoading, setIsRouteLoading] = useState(false);
@@ -251,6 +291,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const clientsRef = useRef<ClientAccount[]>(clients);
+  useEffect(() => {
+    clientsRef.current = clients;
+  }, [clients]);
 
   // Active storefront products vs 30-day Recycle Bin products
   const products = useMemo(
@@ -262,6 +307,195 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
     () => allProducts.filter((p) => Boolean(p.deletedAt)),
     [allProducts]
   );
+
+  // Connect to Firebase Firestore & Auth on boot (gated by permission probe to prevent permission-denied errors)
+  useEffect(() => {
+    let isMounted = true;
+    let unsubProducts: (() => void) | undefined;
+    let unsubOrders: (() => void) | undefined;
+    let unsubOffers: (() => void) | undefined;
+    let unsubCategories: (() => void) | undefined;
+    let unsubClients: (() => void) | undefined;
+    let unsubSettings: (() => void) | undefined;
+
+    const cleanupListeners = () => {
+      unsubProducts?.();
+      unsubOrders?.();
+      unsubOffers?.();
+      unsubCategories?.();
+      unsubClients?.();
+      unsubSettings?.();
+      unsubProducts = undefined;
+      unsubOrders = undefined;
+      unsubOffers = undefined;
+      unsubCategories = undefined;
+      unsubClients = undefined;
+      unsubSettings = undefined;
+    };
+
+    const startFirestoreSyncIfPermitted = async (isAuthenticated: boolean) => {
+      cleanupListeners();
+      const probe = await probeFirestoreAccess();
+      if (!isMounted) return;
+
+      setIsFirebaseConnected(probe.connected);
+
+      // Only seed and attach real-time listeners if the remote Firestore rules permit read access
+      if (!probe.canRead) {
+        return;
+      }
+
+      await seedFirestoreIfEmpty({
+        products: INITIAL_PRODUCTS,
+        orders: INITIAL_ORDERS,
+        offers: INITIAL_OFFERS,
+        categories: CATEGORIES,
+        settings: INITIAL_SETTINGS,
+        clients: INITIAL_CLIENTS,
+      }).catch(() => {});
+
+      if (!isMounted) return;
+
+      try {
+        unsubProducts = onSnapshot(
+          collection(db, 'products'),
+          (snap) => {
+            if (!snap.empty) {
+              const remoteProducts = snap.docs.map(
+                (d) => ({ ...d.data(), id: d.id } as Product)
+              );
+              const now = Date.now();
+              setAllProducts(
+                remoteProducts.filter((p) => {
+                  if (!p.deletedAt) return true;
+                  const deletedTime = new Date(p.deletedAt).getTime();
+                  return now - deletedTime < THIRTY_DAYS_MS;
+                })
+              );
+            }
+          },
+          (err) => {
+            handleFirestoreError(err, OperationType.LIST, 'products', false);
+          }
+        );
+
+        unsubOrders = onSnapshot(
+          collection(db, 'orders'),
+          (snap) => {
+            if (!snap.empty) {
+              const remoteOrders = snap.docs
+                .map((d) => ({ ...d.data(), id: d.id } as Order))
+                .sort(
+                  (a, b) =>
+                    new Date(b.createdAt).getTime() -
+                    new Date(a.createdAt).getTime()
+                );
+              setOrders(remoteOrders);
+            }
+          },
+          (err) => {
+            handleFirestoreError(err, OperationType.LIST, 'orders', false);
+          }
+        );
+
+        unsubOffers = onSnapshot(
+          collection(db, 'offers'),
+          (snap) => {
+            if (!snap.empty) {
+              const remoteOffers = snap.docs.map(
+                (d) => ({ ...d.data(), id: d.id } as Offer)
+              );
+              setOffers(remoteOffers);
+            }
+          },
+          (err) => {
+            handleFirestoreError(err, OperationType.LIST, 'offers', false);
+          }
+        );
+
+        unsubCategories = onSnapshot(
+          collection(db, 'categories'),
+          (snap) => {
+            if (!snap.empty) {
+              const remoteCats = snap.docs.map(
+                (d) => ({ ...d.data(), id: d.id } as CategoryInfo)
+              );
+              setCategories(remoteCats);
+            }
+          },
+          (err) => {
+            handleFirestoreError(err, OperationType.LIST, 'categories', false);
+          }
+        );
+
+        if (isAuthenticated) {
+          unsubClients = onSnapshot(
+            collection(db, 'clients'),
+            (snap) => {
+              if (!snap.empty) {
+                const remoteClients = snap.docs.map(
+                  (d) => ({ ...d.data(), id: d.id } as ClientAccount)
+                );
+                setClients((prev) => {
+                  const byId = new Map<string, ClientAccount>();
+                  prev.forEach((c) => byId.set(c.id, c));
+                  remoteClients.forEach((c) => byId.set(c.id, c));
+                  return Array.from(byId.values());
+                });
+              }
+            },
+            (err) => {
+              handleFirestoreError(err, OperationType.LIST, 'clients', false);
+            }
+          );
+        }
+
+        unsubSettings = onSnapshot(
+          doc(db, 'settings', 'storefront'),
+          (snap) => {
+            if (snap.exists()) {
+              setSiteSettings(snap.data() as SiteSettings);
+            }
+          },
+          (err) => {
+            handleFirestoreError(
+              err,
+              OperationType.GET,
+              'settings/storefront',
+              false
+            );
+          }
+        );
+      } catch {}
+    };
+
+    const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
+      if (!isMounted) return;
+      if (fbUser) {
+        try {
+          const clientProfile = await fetchOrCreateClientForFirebaseUser(
+            fbUser,
+            clientsRef.current
+          );
+          if (!isMounted) return;
+          setCurrentClient(clientProfile);
+          setClients((prev) => {
+            const exists = prev.some((c) => c.id === clientProfile.id);
+            return exists
+              ? prev.map((c) => (c.id === clientProfile.id ? clientProfile : c))
+              : [clientProfile, ...prev];
+          });
+        } catch {}
+      }
+      await startFirestoreSyncIfPermitted(Boolean(fbUser));
+    });
+
+    return () => {
+      isMounted = false;
+      cleanupListeners();
+      unsubAuth();
+    };
+  }, []);
 
   // Save to localStorage & sync across tabs
   useEffect(() => {
@@ -378,35 +612,187 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Client Auth Actions
-  const loginClient = (email: string, password: string): boolean => {
+  // Client Auth Actions (Firebase Auth + Firestore `clients` sync)
+  const loginClient = async (
+    email: string,
+    password: string
+  ): Promise<{ ok: boolean; error?: string }> => {
     const normalized = email.trim().toLowerCase();
-    const match = clients.find(
+
+    // First check existing Firestore/seeded client profiles (for instant demo accounts or local profiles)
+    const localMatch = clients.find(
       (c) =>
         c.email.toLowerCase() === normalized &&
         (c.password === password || password === 'demo')
     );
-    if (!match) return false;
-    setCurrentClient(match);
-    showToast(`Welcome back, ${match.name}`);
-    return true;
+
+    if (localMatch && password === 'demo') {
+      setCurrentClient(localMatch);
+      showToast(`Welcome back, ${localMatch.name}`);
+      return { ok: true };
+    }
+
+    try {
+      const cred = await signInWithEmailAndPassword(auth, normalized, password);
+      const clientProfile = await fetchOrCreateClientForFirebaseUser(
+        cred.user,
+        clientsRef.current
+      );
+      setCurrentClient(clientProfile);
+      setClients((prev) => {
+        const exists = prev.some((c) => c.id === clientProfile.id);
+        return exists
+          ? prev.map((c) => (c.id === clientProfile.id ? clientProfile : c))
+          : [clientProfile, ...prev];
+      });
+      showToast(`Welcome back, ${clientProfile.name}`);
+      return { ok: true };
+    } catch (fbErr: any) {
+      // If account exists in seeded/synced client accounts, sign them in cleanly
+      if (localMatch) {
+        setCurrentClient(localMatch);
+        showToast(`Welcome back, ${localMatch.name}`);
+        return { ok: true };
+      }
+
+      const code = fbErr?.code || '';
+      if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
+        return {
+          ok: false,
+          error:
+            'Invalid email or password. Please verify your credentials or create a new client account.',
+        };
+      }
+      return {
+        ok: false,
+        error:
+          fbErr?.message ||
+          'Unable to sign in with those credentials. Please check your email and password.',
+      };
+    }
   };
 
-  const registerClient = (
+  const registerClient = async (
     data: Omit<ClientAccount, 'id' | 'createdAt'>
-  ): ClientAccount => {
-    const created: ClientAccount = {
-      ...data,
-      id: `client-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-    };
-    setClients((prev) => [created, ...prev]);
-    setCurrentClient(created);
-    showToast(`Account created for ${created.name}`);
-    return created;
+  ): Promise<{ ok: boolean; client?: ClientAccount; error?: string }> => {
+    const normalizedEmail = data.email.trim().toLowerCase();
+    const pwd = data.password || 'password123';
+
+    try {
+      const cred = await createUserWithEmailAndPassword(
+        auth,
+        normalizedEmail,
+        pwd
+      );
+      if (data.name) {
+        await updateProfile(cred.user, { displayName: data.name }).catch(
+          () => {}
+        );
+      }
+      const created = await fetchOrCreateClientForFirebaseUser(
+        cred.user,
+        clientsRef.current,
+        {
+          name: data.name,
+          phone: data.phone,
+          defaultAddress: data.defaultAddress,
+          city: data.city,
+          password: pwd,
+        }
+      );
+      setClients((prev) => [
+        created,
+        ...prev.filter((c) => c.id !== created.id),
+      ]);
+      setCurrentClient(created);
+      showToast(`Account created for ${created.name}`);
+      return { ok: true, client: created };
+    } catch (fbErr: any) {
+      const code = fbErr?.code || '';
+      if (code === 'auth/email-already-in-use') {
+        return {
+          ok: false,
+          error:
+            'An account with this email already exists. Please switch to Sign In.',
+        };
+      }
+      if (code === 'auth/weak-password') {
+        return {
+          ok: false,
+          error: 'Password must be at least 6 characters long.',
+        };
+      }
+
+      // Persist client account directly to Firestore `clients` collection even if Email/Password provider is not yet enabled in Firebase Console
+      const created: ClientAccount = {
+        ...data,
+        email: normalizedEmail,
+        authProvider: 'password',
+        id: `client-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+      };
+      await saveClientToFirestore(created);
+      setClients((prev) => [created, ...prev]);
+      setCurrentClient(created);
+      showToast(`Account created and saved to Firestore for ${created.name}`);
+      return { ok: true, client: created };
+    }
   };
 
-  const logoutClient = () => {
+  const loginWithGoogle = async (): Promise<{
+    ok: boolean;
+    client?: ClientAccount;
+    error?: string;
+  }> => {
+    try {
+      const cred = await signInWithPopup(auth, googleProvider);
+      const clientProfile = await fetchOrCreateClientForFirebaseUser(
+        cred.user,
+        clientsRef.current
+      );
+      setClients((prev) => [
+        clientProfile,
+        ...prev.filter((c) => c.id !== clientProfile.id),
+      ]);
+      setCurrentClient(clientProfile);
+      showToast(`Signed in with Google as ${clientProfile.name}`);
+      return { ok: true, client: clientProfile };
+    } catch (fbErr: any) {
+      const code = fbErr?.code || '';
+      if (code === 'auth/popup-closed-by-user') {
+        return {
+          ok: false,
+          error: 'Google sign-in popup was closed before completing authentication.',
+        };
+      }
+      if (code === 'auth/unauthorized-domain') {
+        const domain =
+          typeof window !== 'undefined' ? window.location.hostname : '';
+        return {
+          ok: false,
+          error: `Google Sign-In requires "${domain}" to be added under Firebase Console (tech-sokoni) → Authentication → Settings → Authorized domains.`,
+        };
+      }
+      if (code === 'auth/operation-not-allowed' || code === 'auth/configuration-not-found') {
+        return {
+          ok: false,
+          error:
+            'Please enable the Google Sign-In provider in your Firebase Console (tech-sokoni → Authentication → Sign-in method → Google).',
+        };
+      }
+      return {
+        ok: false,
+        error:
+          fbErr?.message ||
+          'Google Sign-In could not be completed. Please try again.',
+      };
+    }
+  };
+
+  const logoutClient = async () => {
+    try {
+      await signOut(auth);
+    } catch {}
     setCurrentClient(null);
     showToast('Signed out of Client Area');
   };
@@ -418,16 +804,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
     setClients((prev) =>
       prev.map((c) => (c.id === updated.id ? updated : c))
     );
-    showToast('Client profile updated');
+    saveClientToFirestore(updated).catch(() => {});
+    showToast('Client profile synced to Firestore');
   };
 
   const cancelClientOrder = (orderId: string) => {
     setOrders((prev) =>
-      prev.map((o) =>
-        o.id === orderId && o.status === 'Processing'
-          ? { ...o, status: 'Cancelled' }
-          : o
-      )
+      prev.map((o) => {
+        if (o.id === orderId && o.status === 'Processing') {
+          const updatedOrder: Order = { ...o, status: 'Cancelled' };
+          saveOrderToFirestore(updatedOrder).catch(() => {});
+          return updatedOrder;
+        }
+        return o;
+      })
     );
     showToast('Order cancelled');
   };
@@ -682,16 +1072,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
       createdAt: new Date().toISOString(),
     };
     setOrders((prev) => [newOrder, ...prev]);
+    saveOrderToFirestore(newOrder).catch(() => {});
 
-    // Decrement stock for ordered items
+    // Decrement stock for ordered items and sync to Firestore
     setAllProducts((prev) =>
       prev.map((prod) => {
         const ordered = orderData.items.find((i) => i.productId === prod.id);
         if (!ordered) return prod;
-        return {
+        const updatedProd: Product = {
           ...prod,
           stock: Math.max(0, prod.stock - ordered.quantity),
         };
+        saveProductToFirestore(updatedProd).catch(() => {});
+        return updatedProd;
       })
     );
 
@@ -716,40 +1109,52 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
         const avg =
           nextReviews.reduce((sum, r) => sum + r.rating, 0) /
           nextReviews.length;
-        return {
+        const updatedProd: Product = {
           ...p,
           reviews: nextReviews,
           reviewCount: p.reviewCount + 1,
           rating: Number(avg.toFixed(1)),
         };
+        saveProductToFirestore(updatedProd).catch(() => {});
+        return updatedProd;
       })
     );
     showToast('Review published. Thank you.');
   };
 
-  // Admin Product & 30-Day Recycle Bin Management
+  // Admin Product & 30-Day Recycle Bin Management (Synced to Firestore)
   const addProduct = (productData: Omit<Product, 'id'>): Product => {
     const created: Product = {
       ...productData,
       id: `prod-${Date.now()}`,
     };
     setAllProducts((prev) => [created, ...prev]);
-    showToast(`Published ${created.name} to Storefront`);
+    saveProductToFirestore(created).catch(() => {});
+    showToast(`Published ${created.name} to Storefront & Firestore`);
     return created;
   };
 
   const updateProduct = (id: string, updates: Partial<Product>) => {
     setAllProducts((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, ...updates } : p))
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const updatedProd = { ...p, ...updates };
+        saveProductToFirestore(updatedProd).catch(() => {});
+        return updatedProd;
+      })
     );
-    showToast('Synced changes to Storefront');
+    showToast('Synced product changes to Storefront & Firestore');
   };
 
   const deleteProduct = (id: string) => {
+    const deletedAt = new Date().toISOString();
     setAllProducts((prev) =>
-      prev.map((p) =>
-        p.id === id ? { ...p, deletedAt: new Date().toISOString() } : p
-      )
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const updatedProd = { ...p, deletedAt };
+        saveProductToFirestore(updatedProd).catch(() => {});
+        return updatedProd;
+      })
     );
     setCart((prev) => prev.filter((c) => c.productId !== id));
     showToast('Moved product to Recycle Bin (retained for 30 days)');
@@ -757,14 +1162,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const restoreProduct = (id: string) => {
     setAllProducts((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, deletedAt: undefined } : p))
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const updatedProd = { ...p, deletedAt: undefined };
+        saveProductToFirestore(updatedProd).catch(() => {});
+        return updatedProd;
+      })
     );
     showToast('Restored product to live Storefront');
   };
 
   const permanentlyDeleteProduct = (id: string) => {
     setAllProducts((prev) => prev.filter((p) => p.id !== id));
-    showToast('Permanently purged product from Recycle Bin');
+    removeProductFromFirestore(id).catch(() => {});
+    showToast('Permanently purged product from Recycle Bin & Firestore');
   };
 
   const getDaysRemainingInRecycleBin = (deletedAt?: string): number => {
@@ -785,6 +1196,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
       deletedAt: undefined,
     };
     setAllProducts((prev) => [copy, ...prev]);
+    saveProductToFirestore(copy).catch(() => {});
     showToast(`Duplicated ${source.name}`);
     return copy;
   };
@@ -796,19 +1208,26 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
       id: `offer-${Date.now()}`,
     };
     setOffers((prev) => [created, ...prev]);
+    saveOfferToFirestore(created).catch(() => {});
     showToast(`Offer "${created.title}" synced to Storefront`);
     return created;
   };
 
   const updateOffer = (id: string, updates: Partial<Offer>) => {
     setOffers((prev) =>
-      prev.map((o) => (o.id === id ? { ...o, ...updates } : o))
+      prev.map((o) => {
+        if (o.id !== id) return o;
+        const updatedOffer = { ...o, ...updates };
+        saveOfferToFirestore(updatedOffer).catch(() => {});
+        return updatedOffer;
+      })
     );
     showToast('Offer synced to Storefront');
   };
 
   const deleteOffer = (id: string) => {
     setOffers((prev) => prev.filter((o) => o.id !== id));
+    removeOfferFromFirestore(id).catch(() => {});
     showToast('Offer removed');
   };
 
@@ -818,28 +1237,38 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
     trackingNote?: string
   ) => {
     setOrders((prev) =>
-      prev.map((o) =>
-        o.id === orderId
-          ? {
-              ...o,
-              status,
-              trackingNote:
-                trackingNote !== undefined ? trackingNote : o.trackingNote,
-            }
-          : o
-      )
+      prev.map((o) => {
+        if (o.id !== orderId) return o;
+        const updatedOrder: Order = {
+          ...o,
+          status,
+          trackingNote:
+            trackingNote !== undefined ? trackingNote : o.trackingNote,
+        };
+        saveOrderToFirestore(updatedOrder).catch(() => {});
+        return updatedOrder;
+      })
     );
     showToast(`Order status updated to ${status}`);
   };
 
   const updateSettings = (updates: Partial<SiteSettings>) => {
-    setSiteSettings((prev) => ({ ...prev, ...updates }));
-    showToast('Storefront settings synced');
+    setSiteSettings((prev) => {
+      const next = { ...prev, ...updates };
+      saveSettingsToFirestore(next).catch(() => {});
+      return next;
+    });
+    showToast('Storefront settings synced to Firestore');
   };
 
   const updateCategory = (id: CategoryId, updates: Partial<CategoryInfo>) => {
     setCategories((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, ...updates } : c))
+      prev.map((c) => {
+        if (c.id !== id) return c;
+        const next = { ...c, ...updates };
+        saveCategoryToFirestore(next).catch(() => {});
+        return next;
+      })
     );
     showToast('Category updated on Storefront');
   };
@@ -850,6 +1279,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
     setOffers(INITIAL_OFFERS);
     setOrders(INITIAL_ORDERS);
     setSiteSettings(INITIAL_SETTINGS);
+    seedFirestoreIfEmpty({
+      products: INITIAL_PRODUCTS,
+      orders: INITIAL_ORDERS,
+      offers: INITIAL_OFFERS,
+      categories: CATEGORIES,
+      settings: INITIAL_SETTINGS,
+      clients: INITIAL_CLIENTS,
+    }).catch(() => {});
     showToast('Storefront reset to factory showroom state');
   };
 
@@ -875,8 +1312,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({
         toastMessage,
         clients,
         currentClient,
+        isFirebaseConnected,
         loginClient,
         registerClient,
+        loginWithGoogle,
         logoutClient,
         updateClientProfile,
         cancelClientOrder,

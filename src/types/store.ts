@@ -153,12 +153,15 @@ export interface Order {
 
 export interface ClientAccount {
   id: string;
+  uid?: string;
   name: string;
   email: string;
   phone: string;
-  password: string;
+  password?: string;
   defaultAddress: string;
   city: string;
+  authProvider?: 'password' | 'google';
+  photoURL?: string;
   createdAt: string;
 }
 
@@ -179,7 +182,7 @@ export type ActiveRoute =
   | { page: 'deals' }
   | { page: 'product'; productId: string }
   | { page: 'admin' }
-  | { page: 'client-portal' }
+  | { page: 'client-portal'; tab?: 'orders' | 'history' | 'profile' }
   | { page: 'compare' }
   | { page: 'wishlist' }
   | {

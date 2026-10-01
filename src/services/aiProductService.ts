@@ -4,9 +4,13 @@ import {
   ProductVariationGroup,
 } from '../types/store';
 import {
-  AiGeneratedProductPayload,
+  ParsedProductResult,
   parseAndEnforceExactUserSpecs,
 } from '../utils/exactProductParser';
+
+export type AiGeneratedProductPayload = Partial<ParsedProductResult> & {
+  condition?: ProductCondition;
+};
 
 export interface GenerateProductServiceOptions {
   /**
@@ -109,9 +113,9 @@ export const AiProductService = {
 
     const validConditions: ProductCondition[] = ['New', 'Refurbished', 'Used'];
     const resolvedCondition: ProductCondition = validConditions.includes(
-      enforced.condition as ProductCondition
+      rawAiData.condition as ProductCondition
     )
-      ? (enforced.condition as ProductCondition)
+      ? (rawAiData.condition as ProductCondition)
       : /\b(refurbished|renewed)\b/i.test(query)
       ? 'Refurbished'
       : /\b(used|pre-owned|ex-uk)\b/i.test(query)
@@ -127,7 +131,19 @@ export const AiProductService = {
       price: enforced.price > 0 ? enforced.price : 999,
       shortSpec: enforced.shortSpec,
       shortDescription: enforced.shortDescription,
-      specs: enforced.specs,
+      specs: {
+        processor: enforced.processor,
+        ram: enforced.ram,
+        storage: enforced.storage,
+        screenSize: enforced.screenSize,
+        graphics: enforced.graphics,
+        color: enforced.color,
+        os: enforced.os,
+        battery: enforced.battery,
+        ports: enforced.ports,
+        weight: enforced.weight,
+        warranty: enforced.warranty,
+      },
       // Only return variations when explicitly turned ON by the admin
       variations: options.includeVariations ? enforced.variations : [],
     };
